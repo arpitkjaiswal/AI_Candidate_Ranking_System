@@ -26,6 +26,7 @@ def prepare_all_data(
     output_dir: str,
     embedding_mode: str = "sentence_transformers",
     populate_sqlite: bool = False,
+    job_description: str | None = None,
 ) -> dict:
     """
     Full data preparation pipeline:
@@ -57,6 +58,8 @@ def prepare_all_data(
         candidate_ids.append(cleaned["candidate_id"])
 
     logger.info(f"Loaded {len(candidates_data)} candidates")
+    if not candidates_data:
+        raise ValueError("Dataset contains no valid candidates")
 
     # ─── Step 2: Extract Features ────────────────────────────────────────
     logger.info("Step 2: Extracting features...")
@@ -78,7 +81,7 @@ def prepare_all_data(
         text = build_candidate_text(data)
         candidate_texts.append(text)
 
-    jd_text = build_jd_text()
+    jd_text = job_description or build_jd_text()
 
     # ─── Step 4: Generate Embeddings ─────────────────────────────────────
     logger.info(f"Step 4: Generating embeddings (mode={embedding_mode})...")

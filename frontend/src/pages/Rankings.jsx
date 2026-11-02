@@ -21,20 +21,22 @@ export default function Rankings() {
   useEffect(() => { setPage(1) }, [selectedJob, minScore, honeypots])
 
   useEffect(() => {
-    listJobs().then(setJobs).catch(() => {})
+    listJobs().then(setJobs).catch(e => setError(e.message))
   }, [])
 
   useEffect(() => {
     if (!selectedJob) { setData(null); return }
+    let active = true
     setLoading(true)
     setError(null)
     const params = { page, size: PAGE_SIZE }
     if (minScore) params.min_score = minScore
     if (honeypots) params.honeypots_only = true
     getRankings(selectedJob, params)
-      .then(setData)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+      .then(result => { if (active) setData(result) })
+      .catch(e => { if (active) setError(e.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
   }, [selectedJob, page, minScore, honeypots]) // eslint-disable-line
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0

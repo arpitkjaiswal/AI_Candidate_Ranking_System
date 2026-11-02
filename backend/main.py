@@ -74,11 +74,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the SQLite database on startup."""
-    try:
-        init_db()
-        logger.info("Database initialized successfully.")
-    except Exception as exc:
-        logger.warning(f"DB init warning (may already exist): {exc}")
+    init_db()
+    logger.info("Database initialized successfully.")
     yield
 
 
@@ -97,8 +94,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Tighten in production
-    allow_credentials=True,
+    allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -128,17 +125,21 @@ def list_candidates(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     size: int = Query(50, ge=1, le=500, description="Results per page"),
     country: Optional[str] = Query(None, description="Filter by country (case-insensitive)"),
+    search: Optional[str] = Query(None, max_length=200, description="Search name, title or company"),
     open_to_work: Optional[bool] = Query(None, description="Filter by open-to-work flag"),
-    min_yoe: Optional[float] = Query(None, description="Minimum years of experience"),
-    max_yoe: Optional[float] = Query(None, description="Maximum years of experience"),
+    min_yoe: Optional[float] = Query(None, ge=0, description="Minimum years of experience"),
+    max_yoe: Optional[float] = Query(None, ge=0, description="Maximum years of experience"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
+    if min_yoe is not None and max_yoe is not None and min_yoe > max_yoe:
+        raise HTTPException(status_code=422, detail="Minimum experience must not exceed maximum experience")
     offset = (page - 1) * size
     total, candidates = crud.list_candidates(
         conn,
         limit=size,
         offset=offset,
         country=country,
+        search=search,
         open_to_work=open_to_work,
         min_yoe=min_yoe,
         max_yoe=max_yoe,
@@ -196,10 +197,10 @@ def get_candidate_features(candidate_id: str, conn: sqlite3.Connection = Depends
         raise HTTPException(status_code=500, detail=f"Failed to parse raw_json: {exc}")
 
     try:
-        from src.data_cleaner import clean_candidate
+        from src.data_cleaner import clean_candidate_dict
         from src.feature_extractor import extract_all_features
 
-        cleaned = clean_candidate(candidate)
+        cleaned = clean_candidate_dict(candidate)
         features = extract_all_features(cleaned)
     except Exception as exc:
         logger.exception(f"Feature extraction failed for {candidate_id}")
@@ -345,29 +346,36 @@ def trigger_pipeline(body: PipelineRunRequest, conn: sqlite3.Connection = Depend
             detail=f"Job '{body.job_id}' not found. Create it first via POST /api/jobs.",
         )
 
-    if job.get("status") == "running":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Job '{body.job_id}' is already running.",
-        )
+    from backend.database import get_candidates_path, get_data_dir
+    candidates_path = Path(body.candidates_path).expanduser()
+    if body.candidates_path == "./candidates.jsonl":
+        candidates_path = get_candidates_path()
+    elif not candidates_path.is_absolute():
+        candidates_path = ROOT_DIR / candidates_path
+    candidates_path = candidates_path.resolve()
+    roots = (ROOT_DIR.resolve(), get_data_dir().resolve())
+    if not any(candidates_path.is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=422, detail="Dataset must be inside the project or DATA_DIR")
+    if not candidates_path.is_file():
+        raise HTTPException(status_code=422, detail="Candidate dataset not found. Configure CANDIDATES_PATH or add a JSONL dataset.")
 
+    # Reserve the worker atomically across concurrent requests and API processes.
+    conn.execute("BEGIN IMMEDIATE")
+    if conn.execute("SELECT 1 FROM pipeline_runs WHERE status = 'running' LIMIT 1").fetchone():
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="A pipeline is already running. Wait for it to finish.")
     run_id = str(uuid.uuid4())
-    crud.create_pipeline_run(conn, run_id, body.job_id)
-    crud.update_job_status(conn, body.job_id, "running")
+    conn.execute("INSERT INTO pipeline_runs (run_id, job_id) VALUES (?, ?)", (run_id, body.job_id))
+    conn.execute("UPDATE jobs SET status = 'running' WHERE job_id = ?", (body.job_id,))
+    conn.commit()
 
     # Launch pipeline in background thread so the API responds immediately
     def _run():
-        from backend.database import get_candidates_path
         from backend.pipeline import run_full_pipeline
-        # The frontend's default path is local-development friendly. In
-        # deployment, resolve it to the persistent dataset location instead.
-        candidates_path = body.candidates_path
-        if candidates_path == "./candidates.jsonl":
-            candidates_path = str(get_candidates_path())
         run_full_pipeline(
             run_id=run_id,
             job_id=body.job_id,
-            candidates_path=candidates_path,
+            candidates_path=str(candidates_path),
             top_k=body.top_k,
             embedding_mode=body.embedding_mode,
         )

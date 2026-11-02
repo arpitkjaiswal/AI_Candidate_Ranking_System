@@ -29,11 +29,15 @@ export default function Dashboard() {
       .catch(e => setError(e.message))
   }, [])
 
-  const loading = jobs === null
+  const loading = jobs === null && !error
 
   const doneRuns = runs?.filter(r => r.status === 'done').length ?? 0
   const runningRuns = runs?.filter(r => r.status === 'running').length ?? 0
   const lastRun = runs?.[0]
+  const durations = (runs || []).filter(r => r.status === 'done' && r.started_at && r.finished_at)
+    .map(r => (Date.parse(r.finished_at.replace(' ', 'T') + 'Z') - Date.parse(r.started_at.replace(' ', 'T') + 'Z')) / 1000)
+    .filter(seconds => Number.isFinite(seconds) && seconds >= 0)
+  const averageDuration = durations.length ? `${(durations.reduce((a, b) => a + b, 0) / durations.length).toFixed(1)}s` : '—'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -73,9 +77,9 @@ export default function Dashboard() {
               badgeType={runningRuns > 0 ? 'amber' : 'green'}
             />
             <StatCard
-              value={doneRuns > 0 ? '~2.7s' : '—'}
-              label="Avg inference time"
-              badge="CPU only"
+              value={averageDuration}
+              label="Avg pipeline duration"
+              badge="Completed runs"
               badgeType="blue"
             />
           </div>

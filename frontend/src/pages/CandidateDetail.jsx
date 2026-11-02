@@ -22,31 +22,36 @@ export default function CandidateDetail() {
   const [candidate, setCandidate] = useState(null)
   const [ranking, setRanking] = useState(null)
   const [features, setFeatures] = useState(null)
+  const [featureError, setFeatureError] = useState(null)
   const [featuresLoading, setFeaturesLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('profile')
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    let active = true
     // Reset all local state when navigating to a different candidate
     setCandidate(null)
     setRanking(null)
     setFeatures(null)
+    setFeatureError(null)
     setFeaturesLoading(false)
     setActiveTab('profile')
     setError(null)
 
-    getCandidate(id).then(setCandidate).catch(e => setError(e.message))
+    getCandidate(id).then(data => { if (active) setCandidate(data) }).catch(e => { if (active) setError(e.message) })
     if (jobId) {
-      getCandidateRanking(jobId, id).then(setRanking).catch(() => {})
+      getCandidateRanking(jobId, id).then(data => { if (active) setRanking(data) }).catch(() => {})
     }
+    return () => { active = false }
   }, [id, jobId])
 
   function loadFeatures() {
     if (features || featuresLoading) return
     setFeaturesLoading(true)
+    setFeatureError(null)
     getCandidateFeatures(id)
       .then(d => setFeatures(d.features))
-      .catch(() => setFeatures(null))
+      .catch(e => setFeatureError(e.message))
       .finally(() => setFeaturesLoading(false))
   }
 
@@ -262,7 +267,7 @@ export default function CandidateDetail() {
             featuresLoading
               ? <div className="loading-row"><Spinner /> Running feature extraction…</div>
               : !features
-                ? <p style={{ color: 'var(--text3)', fontSize: 13 }}>No features available. Make sure the candidate has a raw JSON blob in the database.</p>
+                ? <div className="error-box">{featureError || 'No features available.'} <button className="btn btn-secondary btn-sm" onClick={loadFeatures}>Retry</button></div>
                 : <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   {[
                     ['Career', ['career_score', 'production_signal_score', 'ml_signal_score', 'product_company_score', 'total_career_months', 'avg_tenure_months', 'job_hopping_penalty', 'is_consulting_heavy']],

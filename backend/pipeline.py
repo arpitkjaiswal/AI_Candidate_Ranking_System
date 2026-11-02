@@ -87,6 +87,9 @@ def _populate_candidates_to_db(conn, candidates_path: str) -> int:
             }
             upsert_candidate(conn, row)
 
+            for table in ("candidate_skills", "candidate_education", "candidate_career"):
+                conn.execute(f"DELETE FROM {table} WHERE candidate_id = ?", (cid,))
+
             # Skills
             for sk in (raw.get("skills") or []):
                 conn.execute(
@@ -189,7 +192,12 @@ def run_full_pipeline(
     start = time.time()
     logger.info(f"[run_id={run_id}] Pipeline starting for job_id={job_id}")
 
+    artifact_dir = PRECOMPUTED_DIR / "runs" / run_id
     try:
+        from backend.crud import get_job
+        job = get_job(conn, job_id)
+        if not job:
+            raise ValueError("Job does not exist")
         # ── Step 1: Populate candidates table ────────────────────────────────
         if not Path(candidates_path).exists():
             raise FileNotFoundError(f"candidates file not found: {candidates_path}")
@@ -203,7 +211,8 @@ def run_full_pipeline(
 
         prepare_all_data(
             candidates_path=candidates_path,
-            output_dir=str(PRECOMPUTED_DIR),
+            output_dir=str(artifact_dir),
+            job_description=f"{job['title']}\n{job['description']}",
             embedding_mode=embedding_mode,
             populate_sqlite=False,  # We already handled it above
         )
@@ -221,7 +230,7 @@ def run_full_pipeline(
         from src.ranking_engine import rank_candidates
 
         ranked = rank_candidates(
-            precomputed_dir=str(PRECOMPUTED_DIR),
+            precomputed_dir=str(artifact_dir),
             weights=weights,
             top_k=top_k,
         )
@@ -230,7 +239,7 @@ def run_full_pipeline(
         logger.info("[Pipeline] Generating reasoning strings...")
         from src.reasoning_generator import generate_all_reasoning
 
-        ranked = generate_all_reasoning(ranked, str(PRECOMPUTED_DIR))
+        ranked = generate_all_reasoning(ranked, str(artifact_dir))
 
         # ── Step 6: Persist rankings ──────────────────────────────────────
         logger.info("[Pipeline] Saving rankings to SQLite...")
@@ -247,6 +256,7 @@ def run_full_pipeline(
         )
 
     except Exception as exc:
+        conn.rollback()
         logger.exception(f"[run_id={run_id}] Pipeline FAILED: {exc}")
         try:
             update_job_status(conn, job_id, "failed")

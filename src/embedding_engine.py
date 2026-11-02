@@ -44,8 +44,8 @@ class EmbeddingEngine:
 
         self._vectorizer = TfidfVectorizer(
             max_features=50000,
-            min_df=2,
-            max_df=0.95,
+            min_df=1,
+            max_df=1.0,
             ngram_range=(1, 2),
             sublinear_tf=True,
             strip_accents="unicode",
@@ -56,8 +56,14 @@ class EmbeddingEngine:
 
         # Reduce dimensionality with SVD
         n_components = min(self._embedding_dim, tfidf_matrix.shape[1] - 1, tfidf_matrix.shape[0] - 1)
-        self._svd = TruncatedSVD(n_components=n_components, random_state=42)
-        embeddings = self._svd.fit_transform(tfidf_matrix)
+        # Preserve exact TF-IDF geometry for small corpora. Reducing two
+        # unrelated documents to one dimension can make them look identical.
+        self._svd = None
+        if tfidf_matrix.shape[0] <= self._embedding_dim or tfidf_matrix.shape[1] < 2:
+            embeddings = tfidf_matrix.toarray()
+        else:
+            self._svd = TruncatedSVD(n_components=n_components, random_state=42)
+            embeddings = self._svd.fit_transform(tfidf_matrix)
 
         elapsed = time.time() - start
         logger.info(f"TF-IDF + SVD fit complete in {elapsed:.1f}s. "
@@ -67,11 +73,11 @@ class EmbeddingEngine:
 
     def transform_tfidf(self, texts: list[str]) -> np.ndarray:
         """Transform new texts using fitted TF-IDF + SVD."""
-        if self._vectorizer is None or self._svd is None:
+        if self._vectorizer is None:
             raise RuntimeError("Must call fit_tfidf() first")
 
         tfidf_matrix = self._vectorizer.transform(texts)
-        embeddings = self._svd.transform(tfidf_matrix)
+        embeddings = self._svd.transform(tfidf_matrix) if self._svd is not None else tfidf_matrix.toarray()
         return embeddings
 
     def encode_texts(self, texts: list[str], batch_size: int = 256) -> np.ndarray:

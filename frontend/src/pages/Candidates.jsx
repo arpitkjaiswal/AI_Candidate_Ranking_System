@@ -12,6 +12,7 @@ export default function Candidates() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [country, setCountry] = useState(searchParams.get('country') || '')
   const [openToWork, setOpenToWork] = useState(searchParams.get('open') || '')
@@ -19,21 +20,24 @@ export default function Candidates() {
   const [maxYoe, setMaxYoe] = useState('')
 
   useEffect(() => {
+    let active = true
     setLoading(true)
     setError(null)
     const params = { page, size: PAGE_SIZE }
+    if (search.trim()) params.search = search.trim()
     if (country) params.country = country
     if (openToWork !== '') params.open_to_work = openToWork
     if (minYoe) params.min_yoe = minYoe
     if (maxYoe) params.max_yoe = maxYoe
 
     listCandidates(params)
-      .then(setData)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [page, country, openToWork, minYoe, maxYoe])
+      .then(result => { if (active) setData(result) })
+      .catch(e => { if (active) setError(e.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [page, country, openToWork, minYoe, maxYoe, search])
 
-  useEffect(() => { setPage(1) }, [country, openToWork, minYoe, maxYoe])
+  useEffect(() => { setPage(1) }, [country, openToWork, minYoe, maxYoe, search])
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
 
@@ -47,6 +51,7 @@ export default function Candidates() {
       </div>
 
       <div className="filters">
+        <input type="search" aria-label="Search candidates" placeholder="Search name, role or company…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: '1 1 240px' }} />
         <input
           type="text"
           placeholder="Filter by country…"
@@ -73,9 +78,9 @@ export default function Candidates() {
           onChange={e => setMaxYoe(e.target.value)}
           style={{ width: 90 }}
         />
-        {(country || openToWork || minYoe || maxYoe) && (
+        {(search || country || openToWork || minYoe || maxYoe) && (
           <button className="btn btn-secondary btn-sm" onClick={() => {
-            setCountry(''); setOpenToWork(''); setMinYoe(''); setMaxYoe('')
+            setSearch(''); setCountry(''); setOpenToWork(''); setMinYoe(''); setMaxYoe('')
           }}>Clear filters</button>
         )}
       </div>

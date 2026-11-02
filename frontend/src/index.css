@@ -855,3 +855,45 @@ textarea {
   .nav-item { justify-content: center; padding: 10px; }
   .main-content { padding: 20px 16px; }
 }
+
+/* Accessible controls and layouts that adapt to narrow screens. */
+:root { color-scheme: dark; --text3: #929bb7; }
+.main-content { min-width: 0; }
+button, .btn, input, select { min-height: 40px; }
+button:focus-visible, a:focus-visible, input:focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+button:disabled { cursor: not-allowed; }
+.card { background: linear-gradient(145deg, var(--surface), #181e2e); }
+.stat-card { border-top: 2px solid var(--accent-dim); }
+.stat-value { letter-spacing: -1px; }
+.page-header h2 { letter-spacing: -.7px; }
+.pipeline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.skip-link { position: fixed; top: -60px; left: 16px; z-index: 100; padding: 12px; background: var(--accent); color: white; }
+.skip-link:focus { top: 12px; }
+.error-box { overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  .pipeline-grid { grid-template-columns: 1fr; }
+  .nav-item { min-height: 44px; }
+}
+@media (max-width: 600px) {
+  .layout { flex-direction: column; height: 100dvh; }
+  .sidebar { width: 100%; min-width: 0; padding: 8px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .sidebar-nav { flex-direction: row; padding: 0; gap: 4px; justify-content: space-around; }
+  .nav-item { flex: 1; flex-direction: column; gap: 4px; padding: 8px 4px; font-size: 10px; }
+  .nav-item span { display: inline; }
+  .main-content { padding: 20px 12px; }
+  .page-header { flex-wrap: wrap; gap: 14px; }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filters { gap: 8px; }
+  .filters input, .filters select { flex: 1 1 120px; min-width: 0 !important; }
+  .modal { width: calc(100vw - 24px); max-height: 90dvh; overflow-y: auto; padding: 20px; }
+  .tabs { overflow-x: auto; }
+  .run-card { flex-wrap: wrap; }
+  .run-info { min-width: 0; overflow-wrap: anywhere; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

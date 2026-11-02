@@ -32,8 +32,11 @@ export default function Pipeline() {
 
 
   useEffect(() => {
-    listJobs().then(setJobs).catch(() => {})
-    listPipelineRuns().then(setRuns).catch(() => {})
+    listJobs().then(setJobs).catch(e => setTriggerError(e.message))
+    listPipelineRuns().then(data => {
+      setRuns(data)
+      setPollingId(data.find(run => run.status === 'running')?.run_id || null)
+    }).catch(e => setTriggerError(e.message))
   }, [])
 
   // Poll a running run every 3 seconds
@@ -46,7 +49,7 @@ export default function Pipeline() {
           clearInterval(interval)
           setPollingId(null)
         }
-      }).catch(() => {})
+      }).catch(e => setTriggerError(e.message))
     }, 3000)
     return () => clearInterval(interval)
   }, [pollingId])
@@ -82,7 +85,7 @@ export default function Pipeline() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
+      <div className="pipeline-grid">
         {/* Trigger form */}
         <div className="card">
           <div className="section-title">New pipeline run</div>
