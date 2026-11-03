@@ -5,11 +5,12 @@ import { Link } from 'react-router-dom'
 
 function CreateJobModal({ onClose, onCreate }) {
   const dialog = useRef(null)
+  const submittingRef = useRef(false)
   useEffect(() => {
     const previous = document.activeElement
     dialog.current?.querySelector('input')?.focus()
     function keyboard(event) {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && !submittingRef.current) onClose()
       if (event.key !== 'Tab') return
       const controls = [...dialog.current.querySelectorAll('button, input, textarea')].filter(el => !el.disabled)
       const first = controls[0], last = controls[controls.length - 1]
@@ -28,6 +29,7 @@ function CreateJobModal({ onClose, onCreate }) {
   async function handleSubmit(e) {
     e.preventDefault()
     if (!form.job_id || !form.title || !form.description) return
+    submittingRef.current = true
     setSubmitting(true)
     setError(null)
     try {
@@ -37,16 +39,17 @@ function CreateJobModal({ onClose, onCreate }) {
     } catch (err) {
       setError(err.message)
     } finally {
+      submittingRef.current = false
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div ref={dialog} className="modal" role="dialog" aria-modal="true" aria-label="Create job posting" onKeyDown={e => { if (e.key === 'Escape') onClose() }}>
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && !submitting && onClose()}>
+      <div ref={dialog} className="modal" role="dialog" aria-modal="true" aria-label="Create job posting" >
         <div className="modal-header">
           <span className="modal-title">Create job posting</span>
-          <button aria-label="Close dialog" className="modal-close" onClick={onClose}>×</button>
+          <button aria-label="Close dialog" className="modal-close" onClick={onClose} disabled={submitting}>×</button>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -86,7 +89,7 @@ function CreateJobModal({ onClose, onCreate }) {
           {error && <div className="error-box">{error}</div>}
 
           <div className="modal-actions">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={submitting}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
               {submitting ? <><Spinner /> Creating…</> : 'Create job'}
             </button>

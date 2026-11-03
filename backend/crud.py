@@ -44,10 +44,16 @@ def list_candidates(
     open_to_work: Optional[bool] = None,
     min_yoe: Optional[float] = None,
     max_yoe: Optional[float] = None,
+    search: Optional[str] = None,
 ) -> Tuple[int, List[dict]]:
     """Return (total_count, page_of_candidates)."""
     filters: list[str] = []
     params: list[Any] = []
+
+    if search and search.strip():
+        term = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        filters.append("(anonymized_name LIKE ? ESCAPE '\\' OR current_title LIKE ? ESCAPE '\\' OR current_company LIKE ? ESCAPE '\\')")
+        params.extend([f"%{term}%"] * 3)
 
     if country:
         filters.append("LOWER(country) = LOWER(?)")
@@ -132,7 +138,30 @@ def upsert_candidate(conn: sqlite3.Connection, candidate: dict) -> None:
             :linkedin_connected, :verified_email, :verified_phone,
             :last_active_date, :signup_date, :raw_json
         ) ON CONFLICT(candidate_id) DO UPDATE SET
-        anonymized_name=excluded.anonymized_name, headline=excluded.headline, summary=excluded.summary, location=excluded.location, country=excluded.country, years_of_experience=excluded.years_of_experience, current_title=excluded.current_title, current_company=excluded.current_company, current_company_size=excluded.current_company_size, current_industry=excluded.current_industry, open_to_work=excluded.open_to_work, willing_to_relocate=excluded.willing_to_relocate, preferred_work_mode=excluded.preferred_work_mode, notice_period_days=excluded.notice_period_days, expected_salary_min=excluded.expected_salary_min, expected_salary_max=excluded.expected_salary_max, github_activity_score=excluded.github_activity_score, profile_completeness_score=excluded.profile_completeness_score, linkedin_connected=excluded.linkedin_connected, verified_email=excluded.verified_email, verified_phone=excluded.verified_phone, last_active_date=excluded.last_active_date, signup_date=excluded.signup_date, raw_json=excluded.raw_json
+            anonymized_name = excluded.anonymized_name,
+            headline = excluded.headline,
+            summary = excluded.summary,
+            location = excluded.location,
+            country = excluded.country,
+            years_of_experience = excluded.years_of_experience,
+            current_title = excluded.current_title,
+            current_company = excluded.current_company,
+            current_company_size = excluded.current_company_size,
+            current_industry = excluded.current_industry,
+            open_to_work = excluded.open_to_work,
+            willing_to_relocate = excluded.willing_to_relocate,
+            preferred_work_mode = excluded.preferred_work_mode,
+            notice_period_days = excluded.notice_period_days,
+            expected_salary_min = excluded.expected_salary_min,
+            expected_salary_max = excluded.expected_salary_max,
+            github_activity_score = excluded.github_activity_score,
+            profile_completeness_score = excluded.profile_completeness_score,
+            linkedin_connected = excluded.linkedin_connected,
+            verified_email = excluded.verified_email,
+            verified_phone = excluded.verified_phone,
+            last_active_date = excluded.last_active_date,
+            signup_date = excluded.signup_date,
+            raw_json = excluded.raw_json
         """,
         candidate,
     )

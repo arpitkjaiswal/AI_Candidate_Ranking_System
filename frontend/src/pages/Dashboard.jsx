@@ -74,7 +74,7 @@ export default function Dashboard() {
             />
             <StatCard
               value={(() => {
-                const completed = runs?.filter(r => r.finished_at && r.started_at) || []
+                const completed = runs?.filter(r => r.status === 'done' && r.finished_at && r.started_at) || []
                 if (!completed.length) return '—'
                 const seconds = completed.reduce((sum, r) => sum + Math.max(0, (Date.parse(r.finished_at.replace(' ', 'T') + 'Z') - Date.parse(r.started_at.replace(' ', 'T') + 'Z')) / 1000), 0) / completed.length
                 return `${seconds.toFixed(1)}s`

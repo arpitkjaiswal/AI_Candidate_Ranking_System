@@ -24,7 +24,7 @@ export default function Sidebar() {
         <span>AI Ranking Engine</span>
       </div>
 
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" aria-label="Main navigation">
         <span className="nav-section-label">Overview</span>
         <NavLink to="/" end className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
           <NavIcon d="M2 12V6L8 2l6 4v6l-6 4-6-4z" />

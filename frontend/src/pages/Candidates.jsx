@@ -13,6 +13,7 @@ export default function Candidates() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [revision, setRevision] = useState(0)
   const [country, setCountry] = useState(searchParams.get('country') || '')
@@ -26,6 +27,7 @@ export default function Candidates() {
     setData(null)
     setError(null)
     const params = { page, size: PAGE_SIZE }
+    if (search.trim()) params.search = search.trim()
     if (country) params.country = country
     if (openToWork !== '') params.open_to_work = openToWork
     if (minYoe) params.min_yoe = minYoe
@@ -36,9 +38,9 @@ export default function Candidates() {
       .catch(e => { if (!controller.signal.aborted) setError(e.message) })
       .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-  }, [page, country, openToWork, minYoe, maxYoe, revision])
+  }, [page, country, openToWork, minYoe, maxYoe, search, revision])
 
-  useEffect(() => { setPage(1) }, [country, openToWork, minYoe, maxYoe])
+  useEffect(() => { setPage(1) }, [country, openToWork, minYoe, maxYoe, search])
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
 
@@ -54,6 +56,7 @@ export default function Candidates() {
       <DatasetUpload onImported={() => { setPage(1); setRevision(value => value + 1) }} />
 
       <div className="filters">
+        <input type="search" aria-label="Search candidates" placeholder="Search name, role or company…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: '1 1 240px' }} />
         <input
           aria-label="Filter by country…" type="text"
           placeholder="Filter by country…"
@@ -80,9 +83,9 @@ export default function Candidates() {
           onChange={e => setMaxYoe(e.target.value)}
           style={{ width: 90 }}
         />
-        {(country || openToWork || minYoe || maxYoe) && (
+        {(search || country || openToWork || minYoe || maxYoe) && (
           <button className="btn btn-secondary btn-sm" onClick={() => {
-            setCountry(''); setOpenToWork(''); setMinYoe(''); setMaxYoe('')
+            setSearch(''); setCountry(''); setOpenToWork(''); setMinYoe(''); setMaxYoe('')
           }}>Clear filters</button>
         )}
       </div>

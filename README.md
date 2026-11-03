@@ -253,3 +253,55 @@ ai-candidate-ranking-engine/
     ├── candidates_lite.pkl        # Lightweight candidate data for reasoning
     └── best_weights.json          # Tuned scoring weights (optional)
 ```
+
+## Local development and verification
+
+Use Python 3.12+ and Node.js 22.12+ (Node24 also works):
+
+```bash
+bash scripts/setup.sh
+bash scripts/dev.sh
+```
+
+The development launcher starts FastAPI on port 8000 and Vite on port 5173,
+with API requests proxied to the local backend. It stops both child services
+when you exit. Without a dataset, it explicitly uses the two built-in example
+profiles in `precomputed/demo-candidates.jsonl`. These demonstrate the workflow;
+they do not validate ranking quality on the 100K-candidate challenge dataset.
+Set `CANDIDATES_PATH` to a JSONL dataset inside the project or `DATA_DIR` to use
+real data. Existing databases retain their profiles; use a separate `DATA_DIR`
+when switching datasets if you want a fresh database.
+
+```bash
+venv/bin/python -m unittest discover -s tests -v
+(cd frontend && node tests/api.test.mjs && npm run build)
+```
+
+Tests use an isolated temporary database and exercise the API, live feature
+extraction, complete background ranking runs, repeat runs, validation, and
+small TF-IDF corpora. No GPU, credentials, or external model is required.
+`sentence_transformers` remains optional and is not installed by default.
+Custom jobs use job-specific text, skill and career evidence. The challenge
+CLI retains its specialized Senior AI Engineer rules when no custom job is
+supplied. Scores support recruiter review and are not validated hiring decisions.
+
+For deployments, set `VITE_API_BASE_URL` at frontend build time if the API has
+a separate origin; otherwise serve `/api` and `/health` from the same origin.
+Set `CORS_ORIGINS` to a comma-separated list of permitted frontend origins.
+Set APP_PASSWORD to protect the UI and API through HTTP Basic authentication;
+the Docker/Render deployment serves both from one origin. Pipeline workers run in-process;
+use a single API worker and avoid restarting it during an active run. A durable
+queue is needed for deployment across restarts and multiple machines.
+
+### Deploying the updated application
+
+Follow [DEPLOYMENT.md](DEPLOYMENT.md) for the Docker-based Render Blueprint,
+persistent SQLite storage, generated login password, backups and release checks.
+The included Blueprint uses one web service for the frontend and API. If upgrading
+an existing separate Vercel frontend and Python Render backend, create and verify
+the new Docker service with persistent storage before migrating traffic; the old
+service configuration does not change merely because render.yaml changed.
+`frontend/vercel.json` remains available for an intentionally separate frontend.
+
+Publishing the Codex development environment does not publish to Render or Vercel.
+Hosting deployment needs access to the hosting account and review of resource costs.

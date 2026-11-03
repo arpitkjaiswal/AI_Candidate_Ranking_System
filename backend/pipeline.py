@@ -107,6 +107,9 @@ def run_full_pipeline(
 
     try:
         conn = get_connection(db)
+        job = get_job(conn, job_id)
+        if not job:
+            raise ValueError("Job does not exist")
         # ── Step 1: Validate a stable dataset snapshot ────────────────────────────────
         if not Path(candidates_path).exists():
             raise FileNotFoundError(f"candidates file not found: {candidates_path}")
@@ -137,7 +140,7 @@ def run_full_pipeline(
             candidates_path=candidates_path,
             output_dir=str(artifacts_dir),
             embedding_mode=embedding_mode,
-            job_description=get_job(conn, job_id)["description"],
+            job_description=f"{job['title']}\n{job['description']}",
             populate_sqlite=False,
         )
         if embedding_mode == "sentence_transformers":

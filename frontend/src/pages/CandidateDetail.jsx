@@ -291,7 +291,7 @@ export default function CandidateDetail() {
             featuresLoading
               ? <div className="loading-row"><Spinner /> Running feature extraction…</div>
               : !features
-                ? <p style={{ color: 'var(--text3)', fontSize: 13 }}>{featureError || 'No features available for this candidate.'}</p>
+                ? <div className="error-box" role="alert">{featureError || 'No features available for this candidate.'} <button className="btn btn-secondary btn-sm" onClick={loadFeatures}>Retry</button></div>
                 : <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <p style={{ color: 'var(--text2)' }}>Feature values used by the ranking engine. Scores describe evidence in the profile and should be reviewed alongside the candidate’s experience.</p>
                   {Object.entries(groupFeatures(features)).map(([section, keys]) => (

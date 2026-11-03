@@ -1,7 +1,7 @@
 // frontend/src/api.js
 
 // Backend URL
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const API_BASE = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const BASE = `${API_BASE}/api`
 const HEALTH_URL = `${API_BASE}/health`
 
@@ -19,10 +19,10 @@ export async function req(path, options = {}) {
         : error.detail
       throw new Error(detail || `Request failed (${res.status})`)
     }
-    return await res.json()
+    return res.status === 204 ? null : await res.json()
   } catch (error) {
     if (error.name === 'TimeoutError') throw new Error('The server took too long to respond. Please try again.')
-    if (error instanceof TypeError) throw new Error('Cannot reach the API. Check your connection and try again.')
+    if (error instanceof TypeError) throw new Error('Unable to reach the API. Check that the backend is running.')
     throw error
   }
 }

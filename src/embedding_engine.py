@@ -62,7 +62,7 @@ class EmbeddingEngine:
         # Low-rank SVD on tiny corpora can turn unrelated documents into the
         # same one-dimensional vector. Preserve the original TF-IDF geometry.
         self._svd = None
-        if tfidf_matrix.shape[1] < 2 or tfidf_matrix.shape[0] <= 8:
+        if tfidf_matrix.shape[1] < 2 or tfidf_matrix.shape[0] <= self._embedding_dim:
             embeddings = tfidf_matrix.toarray()
         else:
             self._svd = TruncatedSVD(n_components=max(1, n_components), random_state=42)

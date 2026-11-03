@@ -2,7 +2,8 @@
 
 The current release candidate passed:
 
-- **46 backend/model integration tests**, including backup/idempotent initialization, ranking without the original dataset file, malformed/duplicate/UTF-16 input rejection, nullable fields, gzip files, atomic rollback, cross-job ranking invalidation, authentication, restart-status recovery, CLI submission format, job-specific ranking and small-corpus similarity.
+- **57 backend/model/workflow tests**, including backup/idempotent initialization, ranking without the original dataset file, malformed/duplicate/UTF-16 input rejection, nullable fields, gzip files, atomic rollback, cross-job ranking invalidation, authentication, restart-status recovery, CLI submission format, job-specific ranking and small-corpus similarity.
+- **Five frontend API tests** using the preserved upstream Node test suite.
 - **Six Chromium browser tests against the built production container with authentication enabled**: recruiter workflow, JSONL upload → persisted profiles → ranking, actual feature rendering, invalid-upload consistency, persistent API errors, and mobile/direct routes.
 - **Container build and fresh startup**, including a deliberately root-owned mounted volume and verification that PID 1 runs as UID 10001.
 - **Production-image smoke checks** for authentication, two-candidate ranking, consistent SQLite backup with integrity check, and identical ranking results after a container restart.

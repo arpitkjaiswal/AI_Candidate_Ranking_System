@@ -158,6 +158,7 @@ def list_candidates(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     size: int = Query(50, ge=1, le=500, description="Results per page"),
     country: Optional[str] = Query(None, description="Filter by country (case-insensitive)"),
+    search: Optional[str] = Query(None, max_length=200, description="Search name, title or company"),
     open_to_work: Optional[bool] = Query(None, description="Filter by open-to-work flag"),
     min_yoe: Optional[float] = Query(None, ge=0, description="Minimum years of experience"),
     max_yoe: Optional[float] = Query(None, ge=0, description="Maximum years of experience"),
@@ -171,6 +172,7 @@ def list_candidates(
         limit=size,
         offset=offset,
         country=country,
+        search=search,
         open_to_work=open_to_work,
         min_yoe=min_yoe,
         max_yoe=max_yoe,
@@ -454,7 +456,7 @@ def trigger_pipeline(body: PipelineRunRequest, conn: sqlite3.Connection = Depend
 
     from backend.database import get_candidates_path, get_data_dir
     run_id = str(uuid.uuid4())
-    candidate_path = get_candidates_path() if body.candidates_path == "./candidates.jsonl" else Path(body.candidates_path)
+    candidate_path = get_candidates_path() if body.candidates_path == "./candidates.jsonl" else Path(body.candidates_path).expanduser()
     use_database = body.candidates_path == "./candidates.jsonl" and bool(conn.execute("SELECT 1 FROM candidates LIMIT 1").fetchone())
     if use_database:
         snapshot_dir = get_data_dir() / "snapshots"
