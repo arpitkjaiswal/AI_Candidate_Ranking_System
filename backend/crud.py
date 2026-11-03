@@ -69,7 +69,7 @@ def list_candidates(
     ).fetchone()[0]
 
     rows = conn.execute(
-        f"SELECT * FROM candidates {where} LIMIT ? OFFSET ?",
+        f"SELECT * FROM candidates {where} ORDER BY candidate_id LIMIT ? OFFSET ?",
         params + [limit, offset],
     ).fetchall()
 
@@ -113,7 +113,7 @@ def upsert_candidate(conn: sqlite3.Connection, candidate: dict) -> None:
     """Insert or replace a single candidate row (without relations)."""
     conn.execute(
         """
-        INSERT OR REPLACE INTO candidates (
+        INSERT INTO candidates (
             candidate_id, anonymized_name, headline, summary,
             location, country, years_of_experience,
             current_title, current_company, current_company_size, current_industry,
@@ -131,7 +131,8 @@ def upsert_candidate(conn: sqlite3.Connection, candidate: dict) -> None:
             :github_activity_score, :profile_completeness_score,
             :linkedin_connected, :verified_email, :verified_phone,
             :last_active_date, :signup_date, :raw_json
-        )
+        ) ON CONFLICT(candidate_id) DO UPDATE SET
+        anonymized_name=excluded.anonymized_name, headline=excluded.headline, summary=excluded.summary, location=excluded.location, country=excluded.country, years_of_experience=excluded.years_of_experience, current_title=excluded.current_title, current_company=excluded.current_company, current_company_size=excluded.current_company_size, current_industry=excluded.current_industry, open_to_work=excluded.open_to_work, willing_to_relocate=excluded.willing_to_relocate, preferred_work_mode=excluded.preferred_work_mode, notice_period_days=excluded.notice_period_days, expected_salary_min=excluded.expected_salary_min, expected_salary_max=excluded.expected_salary_max, github_activity_score=excluded.github_activity_score, profile_completeness_score=excluded.profile_completeness_score, linkedin_connected=excluded.linkedin_connected, verified_email=excluded.verified_email, verified_phone=excluded.verified_phone, last_active_date=excluded.last_active_date, signup_date=excluded.signup_date, raw_json=excluded.raw_json
         """,
         candidate,
     )
@@ -195,7 +196,7 @@ def get_ranking_for_candidate(
 
 
 def upsert_rankings_batch(
-    conn: sqlite3.Connection, job_id: str, ranked: List[dict]
+    conn: sqlite3.Connection, job_id: str, ranked: List[dict], *, commit: bool = True
 ) -> None:
     """Bulk-insert/replace ranking results."""
     data = [
@@ -214,6 +215,7 @@ def upsert_rankings_batch(
         )
         for c in ranked
     ]
+    conn.execute("DELETE FROM rankings WHERE job_id = ?", (job_id,))
     conn.executemany(
         """
         INSERT OR REPLACE INTO rankings
@@ -224,7 +226,8 @@ def upsert_rankings_batch(
         """,
         data,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     logger.info(f"Upserted {len(data)} rankings for job_id={job_id}")
 
 
@@ -248,18 +251,21 @@ def list_jobs(conn: sqlite3.Connection) -> List[dict]:
 
 def create_job(conn: sqlite3.Connection, job_id: str, title: str, description: str) -> dict:
     conn.execute(
-        "INSERT OR REPLACE INTO jobs (job_id, title, description) VALUES (?, ?, ?)",
+        "INSERT INTO jobs (job_id, title, description) VALUES (?, ?, ?)",
         (job_id, title, description),
     )
     conn.commit()
     return get_job(conn, job_id)
 
 
-def update_job_status(conn: sqlite3.Connection, job_id: str, status: str) -> None:
+def update_job_status(
+    conn: sqlite3.Connection, job_id: str, status: str, *, commit: bool = True
+) -> None:
     conn.execute(
         "UPDATE jobs SET status = ? WHERE job_id = ?", (status, job_id)
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -280,6 +286,8 @@ def finish_pipeline_run(
     status: str,
     total_candidates: Optional[int] = None,
     error_message: Optional[str] = None,
+    *,
+    commit: bool = True,
 ) -> None:
     conn.execute(
         """
@@ -290,7 +298,8 @@ def finish_pipeline_run(
         """,
         (status, total_candidates, error_message, run_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def get_pipeline_run(conn: sqlite3.Connection, run_id: str) -> Optional[dict]:

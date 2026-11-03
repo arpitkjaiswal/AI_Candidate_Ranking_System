@@ -5,7 +5,8 @@ Mirrors the SQLite schema in backend/schema.sql.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
+from pydantic import ConfigDict
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -115,9 +116,10 @@ class RankedCandidateDetail(RankingResult):
 # ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 class JobCreate(BaseModel):
-    job_id: str = Field(..., description="Unique job identifier, e.g. 'senior-ai-eng-2024'")
-    title: str
-    description: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+    job_id: str = Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=50000)
 
 
 class JobResponse(BaseModel):
@@ -137,7 +139,7 @@ class PipelineRunRequest(BaseModel):
         description="Path to candidates JSONL file (server-side path)"
     )
     top_k: int = Field(default=100, ge=1, le=1000)
-    embedding_mode: str = Field(
+    embedding_mode: Literal["tfidf", "sentence_transformers"] = Field(
         default="tfidf",
         description="'tfidf' (fast, no GPU) or 'sentence_transformers' (better quality)"
     )

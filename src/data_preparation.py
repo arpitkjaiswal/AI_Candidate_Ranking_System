@@ -26,6 +26,7 @@ def prepare_all_data(
     output_dir: str,
     embedding_mode: str = "sentence_transformers",
     populate_sqlite: bool = False,
+    job_description: str | None = None,
 ) -> dict:
     """
     Full data preparation pipeline:
@@ -56,6 +57,10 @@ def prepare_all_data(
         candidates_data.append(cleaned)
         candidate_ids.append(cleaned["candidate_id"])
 
+    if not candidates_data:
+        raise ValueError("Dataset contains no valid candidates.")
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ValueError("Dataset contains duplicate candidate IDs.")
     logger.info(f"Loaded {len(candidates_data)} candidates")
 
     # ─── Step 2: Extract Features ────────────────────────────────────────
@@ -78,7 +83,11 @@ def prepare_all_data(
         text = build_candidate_text(data)
         candidate_texts.append(text)
 
-    jd_text = build_jd_text()
+    jd_text = build_jd_text() if job_description is None else job_description
+    job_context = None
+    if job_description is not None:
+        from .job_matching import build_job_context
+        job_context = build_job_context(job_description, candidates_data)
 
     # ─── Step 4: Generate Embeddings ─────────────────────────────────────
     logger.info(f"Step 4: Generating embeddings (mode={embedding_mode})...")
@@ -99,6 +108,13 @@ def prepare_all_data(
 
     # ─── Step 5: Save Artifacts ──────────────────────────────────────────
     logger.info("Step 5: Saving pre-computed artifacts...")
+
+    # Custom roles use their own context; CLI challenge runs retain legacy scoring.
+    context_path = Path(output_dir) / "job_context.json"
+    if job_context is not None:
+        context_path.write_text(json.dumps(job_context, ensure_ascii=False), encoding="utf-8")
+    else:
+        context_path.unlink(missing_ok=True)
 
     # Save candidate IDs
     ids_path = os.path.join(output_dir, "candidate_ids.json")

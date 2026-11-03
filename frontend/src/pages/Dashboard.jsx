@@ -29,7 +29,7 @@ export default function Dashboard() {
       .catch(e => setError(e.message))
   }, [])
 
-  const loading = jobs === null
+  const loading = jobs === null && !error
 
   const doneRuns = runs?.filter(r => r.status === 'done').length ?? 0
   const runningRuns = runs?.filter(r => r.status === 'running').length ?? 0
@@ -51,7 +51,7 @@ export default function Dashboard() {
 
       {loading ? (
         <div className="loading-row"><Spinner /> Loading stats…</div>
-      ) : (
+      ) : error ? null : (
         <>
           <div className="stat-grid">
             <StatCard
@@ -73,9 +73,14 @@ export default function Dashboard() {
               badgeType={runningRuns > 0 ? 'amber' : 'green'}
             />
             <StatCard
-              value={doneRuns > 0 ? '~2.7s' : '—'}
-              label="Avg inference time"
-              badge="CPU only"
+              value={(() => {
+                const completed = runs?.filter(r => r.finished_at && r.started_at) || []
+                if (!completed.length) return '—'
+                const seconds = completed.reduce((sum, r) => sum + Math.max(0, (Date.parse(r.finished_at.replace(' ', 'T') + 'Z') - Date.parse(r.started_at.replace(' ', 'T') + 'Z')) / 1000), 0) / completed.length
+                return `${seconds.toFixed(1)}s`
+              })()}
+              label="Avg pipeline duration"
+              badge="recorded runs"
               badgeType="blue"
             />
           </div>

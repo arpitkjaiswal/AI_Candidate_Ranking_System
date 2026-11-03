@@ -49,3 +49,9 @@ frontend/.vite/
 .idea/
 .DS_Store
 *.swp
+
+.env.*
+!.env.example
+.pytest_cache/
+frontend/test-results/
+frontend/playwright-report/

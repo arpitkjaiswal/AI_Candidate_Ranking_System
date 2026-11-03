@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${HOST_IP:-127.0.0.1}:${PORT:-8000}:8000"
+    environment:
+      DATA_DIR: /var/data
+      CANDIDATES_PATH: ${CANDIDATES_PATH:-}
+      CANDIDATES_URL: ${CANDIDATES_URL:-}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+    volumes:
+      - ranking-data:/var/data
+    restart: unless-stopped
+volumes:
+  ranking-data:

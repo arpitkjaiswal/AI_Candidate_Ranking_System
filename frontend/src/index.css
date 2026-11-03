@@ -855,3 +855,22 @@ textarea {
   .nav-item { justify-content: center; padding: 10px; }
   .main-content { padding: 20px 16px; }
 }
+
+/* Keyboard navigation and compact layouts */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pipeline-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+.main-content { min-width: 0; }
+.error-box { overflow-wrap: anywhere; }
+.tabs { overflow-x: auto; }
+.modal { max-height: 90dvh; overflow-y: auto; }
+@media (max-width: 700px) {
+  .pipeline-grid { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .page-header { flex-wrap: wrap; gap: 12px; }
+  .filters { flex-wrap: wrap; }
+  .sidebar-nav .nav-item span { display: block; font-size: 10px; }
+  .nav-item { flex-direction: column; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

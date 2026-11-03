@@ -1,5 +1,5 @@
 export function ScoreBar({ value, color }) {
-  const pct = Math.round((value || 0) * 100)
+  const pct = Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 100)
   const clr = color || (pct >= 70 ? '#3ecf8e' : pct >= 45 ? '#5b8dee' : '#f5a623')
   return (
     <div className="score-bar-wrap">
@@ -21,7 +21,7 @@ export function Badge({ label, type = 'gray' }) {
 }
 
 export function Spinner() {
-  return <span className="spinner" />
+  return <span className="spinner" role="status" aria-label="Loading" />
 }
 
 export function EmptyState({ icon = '🔍', message }) {

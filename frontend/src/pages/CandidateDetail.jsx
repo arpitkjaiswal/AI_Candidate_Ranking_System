@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { getCandidate, getCandidateRanking, getCandidateFeatures } from '../api'
 import { ScoreBar, Badge, Spinner } from '../components/UI'
@@ -13,8 +13,29 @@ function formatDate(d) {
   return d.slice(0, 7)
 }
 
+function featureGroup(key) {
+  if (/honeypot|anomaly|stuffer/.test(key)) return 'Profile quality'
+  if (/^cluster_|skill|must_have|nice_to_have|certs/.test(key)) return 'Skills'
+  if (/education|degree|best_tier/.test(key)) return 'Education'
+  if (/location|is_india|relocate|work_mode/.test(key)) return 'Location and work preferences'
+  if (/experience|title|career|company|companies|tenure|production|consulting|current_role/.test(key)) return 'Career'
+  return 'Behavioral signals'
+}
+function groupFeatures(features) {
+  return Object.keys(features).reduce((groups, key) => {
+    const group = featureGroup(key)
+    ;(groups[group] ||= []).push(key)
+    return groups
+  }, {})
+}
+function featureLabel(key) {
+  const text = key.replaceAll('_', ' ').replace(/\bml\b/g, 'ML').replace(/\bnlp\b/g, 'NLP').replace(/\bgithub\b/g, 'GitHub')
+  return text[0].toUpperCase() + text.slice(1)
+}
+
 export default function CandidateDetail() {
   const { id } = useParams()
+  const featureRequest = useRef(null)
   const [searchParams] = useSearchParams()
   const jobId = searchParams.get('job')
   const navigate = useNavigate()
@@ -23,31 +44,39 @@ export default function CandidateDetail() {
   const [ranking, setRanking] = useState(null)
   const [features, setFeatures] = useState(null)
   const [featuresLoading, setFeaturesLoading] = useState(false)
+  const [featureError, setFeatureError] = useState(null)
   const [activeTab, setActiveTab] = useState('profile')
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    const controller = new AbortController()
+    featureRequest.current?.abort()
     // Reset all local state when navigating to a different candidate
     setCandidate(null)
     setRanking(null)
     setFeatures(null)
+    setFeatureError(null)
     setFeaturesLoading(false)
     setActiveTab('profile')
     setError(null)
 
-    getCandidate(id).then(setCandidate).catch(e => setError(e.message))
+    getCandidate(id, { signal: controller.signal }).then(setCandidate).catch(e => { if (!controller.signal.aborted) setError(e.message) })
     if (jobId) {
-      getCandidateRanking(jobId, id).then(setRanking).catch(() => {})
+      getCandidateRanking(jobId, id, { signal: controller.signal }).then(setRanking).catch(() => {})
     }
+    return () => { controller.abort(); featureRequest.current?.abort() }
   }, [id, jobId])
 
   function loadFeatures() {
     if (features || featuresLoading) return
     setFeaturesLoading(true)
-    getCandidateFeatures(id)
+    setFeatureError(null)
+    const controller = new AbortController()
+    featureRequest.current = controller
+    getCandidateFeatures(id, { signal: controller.signal })
       .then(d => setFeatures(d.features))
-      .catch(() => setFeatures(null))
-      .finally(() => setFeaturesLoading(false))
+      .catch(e => { if (!controller.signal.aborted) setFeatureError(e.message) })
+      .finally(() => { if (!controller.signal.aborted) setFeaturesLoading(false) })
   }
 
   if (error) return <div className="error-box" style={{ margin: 20 }}>{error}</div>
@@ -186,7 +215,7 @@ export default function CandidateDetail() {
                     ['Last active', p.last_active_date || '—'],
                   ].map(([k, v]) => (
                     <div key={k} className="meta-row">
-                      <span className="meta-key">{k}</span>
+                      <span className="meta-key">{featureLabel(k)}</span>
                       <span className="meta-val" style={{ fontSize: 13 }}>{v}</span>
                     </div>
                   ))}
@@ -262,21 +291,16 @@ export default function CandidateDetail() {
             featuresLoading
               ? <div className="loading-row"><Spinner /> Running feature extraction…</div>
               : !features
-                ? <p style={{ color: 'var(--text3)', fontSize: 13 }}>No features available. Make sure the candidate has a raw JSON blob in the database.</p>
+                ? <p style={{ color: 'var(--text3)', fontSize: 13 }}>{featureError || 'No features available for this candidate.'}</p>
                 : <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  {[
-                    ['Career', ['career_score', 'production_signal_score', 'ml_signal_score', 'product_company_score', 'total_career_months', 'avg_tenure_months', 'job_hopping_penalty', 'is_consulting_heavy']],
-                    ['Skills', ['skill_score', 'skill_cluster_coverage', 'top_skills']],
-                    ['Education', ['education_score', 'highest_degree_score', 'institution_tier_score', 'relevant_field']],
-                    ['Behavioral', ['behavioral_score', 'github_activity', 'recruiter_responsiveness', 'interview_completion_rate', 'open_to_work', 'notice_period_days']],
-                    ['Honeypot', ['honeypot_count', 'is_disqualified', 'honeypot_flags']],
-                  ].map(([section, keys]) => (
+                  <p style={{ color: 'var(--text2)' }}>Feature values used by the ranking engine. Scores describe evidence in the profile and should be reviewed alongside the candidate’s experience.</p>
+                  {Object.entries(groupFeatures(features)).map(([section, keys]) => (
                     <div key={section}>
                       <div className="section-title">{section}</div>
                       <div className="meta-list">
                         {keys.map(k => features[k] !== undefined ? (
                           <div key={k} className="meta-row">
-                            <span className="meta-key" style={{ fontFamily: 'monospace', fontSize: 12 }}>{k}</span>
+                            <span className="meta-key" style={{ fontFamily: 'monospace', fontSize: 12 }}>{featureLabel(k)}</span>
                             <span className="meta-val" style={{ fontSize: 12.5, fontFamily: 'monospace' }}>
                               {typeof features[k] === 'object' ? JSON.stringify(features[k]).slice(0, 80) : String(features[k])}
                             </span>

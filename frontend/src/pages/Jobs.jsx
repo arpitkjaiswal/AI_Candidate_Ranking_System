@@ -1,9 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { listJobs, createJob } from '../api'
 import { Spinner, Badge, EmptyState } from '../components/UI'
 import { Link } from 'react-router-dom'
 
 function CreateJobModal({ onClose, onCreate }) {
+  const dialog = useRef(null)
+  useEffect(() => {
+    const previous = document.activeElement
+    dialog.current?.querySelector('input')?.focus()
+    function keyboard(event) {
+      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Tab') return
+      const controls = [...dialog.current.querySelectorAll('button, input, textarea')].filter(el => !el.disabled)
+      const first = controls[0], last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', keyboard)
+    return () => { document.removeEventListener('keydown', keyboard); previous?.focus() }
+  }, [])
   const [form, setForm] = useState({ job_id: '', title: '', description: '' })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
@@ -16,7 +31,7 @@ function CreateJobModal({ onClose, onCreate }) {
     setSubmitting(true)
     setError(null)
     try {
-      const job = await createJob(form)
+      const job = await createJob(Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v.trim()])))
       onCreate(job)
       onClose()
     } catch (err) {
@@ -28,16 +43,16 @@ function CreateJobModal({ onClose, onCreate }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div ref={dialog} className="modal" role="dialog" aria-modal="true" aria-label="Create job posting" onKeyDown={e => { if (e.key === 'Escape') onClose() }}>
         <div className="modal-header">
           <span className="modal-title">Create job posting</span>
-          <button className="modal-close" onClick={onClose}>×</button>
+          <button aria-label="Close dialog" className="modal-close" onClick={onClose}>×</button>
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div className="form-group">
-            <label className="form-label">Job ID <span style={{ color: 'var(--text3)' }}>(unique slug)</span></label>
-            <input
+            <label className="form-label" htmlFor="Jobs-field-1">Job ID <span style={{ color: 'var(--text3)' }}>(unique slug)</span></label>
+            <input id="Jobs-field-1"
               type="text"
               placeholder="e.g. senior-ai-eng-2024"
               value={form.job_id}
@@ -47,8 +62,8 @@ function CreateJobModal({ onClose, onCreate }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Job title</label>
-            <input
+            <label className="form-label" htmlFor="Jobs-field-2">Job title</label>
+            <input id="Jobs-field-2"
               type="text"
               placeholder="e.g. Senior AI Engineer"
               value={form.title}
@@ -58,8 +73,8 @@ function CreateJobModal({ onClose, onCreate }) {
           </div>
 
           <div className="form-group">
-            <label className="form-label">Job description</label>
-            <textarea
+            <label className="form-label" htmlFor="Jobs-field-3">Job description</label>
+            <textarea id="Jobs-field-3"
               placeholder="Paste the full job description here. The ML engine will use it to compute semantic similarity scores."
               value={form.description}
               onChange={e => set('description', e.target.value)}
@@ -105,9 +120,9 @@ export default function Jobs() {
 
       {error && <div className="error-box">{error}</div>}
 
-      {jobs === null ? (
+      {jobs === null && !error ? (
         <div className="loading-row"><Spinner /> Loading jobs…</div>
-      ) : jobs.length === 0 ? (
+      ) : error ? null : !jobs?.length ? (
         <div className="card">
           <EmptyState icon="📋" message="No jobs yet. Create one to get started — you'll need a job before you can run the ranking pipeline." />
         </div>
@@ -124,7 +139,7 @@ export default function Jobs() {
               </tr>
             </thead>
             <tbody>
-              {jobs.map(j => (
+              {jobs?.map(j => (
                 <tr key={j.job_id}>
                   <td><span className="td-mono">{j.job_id}</span></td>
                   <td style={{ fontWeight: 600 }}>{j.title}</td>

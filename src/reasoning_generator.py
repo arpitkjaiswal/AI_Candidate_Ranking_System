@@ -27,6 +27,10 @@ def generate_reasoning(
     Returns:
         1-2 sentence reasoning string
     """
+    if "job_match" in candidate_result:
+        from .job_matching import explain_job_match
+        return explain_job_match(candidate_result)
+
     features = candidate_result.get("features", {})
     component_scores = candidate_result.get("component_scores", {})
     score = candidate_result.get("score", 0)

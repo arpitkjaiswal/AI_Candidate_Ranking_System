@@ -14,6 +14,7 @@ export default function Rankings() {
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [jobsError, setJobsError] = useState(null)
   const [minScore, setMinScore] = useState('')
   const [honeypots, setHoneypots] = useState(false)
 
@@ -21,20 +22,27 @@ export default function Rankings() {
   useEffect(() => { setPage(1) }, [selectedJob, minScore, honeypots])
 
   useEffect(() => {
-    listJobs().then(setJobs).catch(() => {})
+    const controller = new AbortController()
+    listJobs({ signal: controller.signal }).then(setJobs).catch(error => {
+      if (!controller.signal.aborted) setJobsError(error.message)
+    })
+    return () => controller.abort()
   }, [])
 
   useEffect(() => {
-    if (!selectedJob) { setData(null); return }
+    if (!selectedJob) { setData(null); setError(null); setLoading(false); return }
+    const controller = new AbortController()
     setLoading(true)
+    setData(null)
     setError(null)
     const params = { page, size: PAGE_SIZE }
     if (minScore) params.min_score = minScore
     if (honeypots) params.honeypots_only = true
-    getRankings(selectedJob, params)
+    getRankings(selectedJob, params, { signal: controller.signal })
       .then(setData)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+      .catch(e => { if (!controller.signal.aborted) setError(e.message) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
   }, [selectedJob, page, minScore, honeypots]) // eslint-disable-line
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
@@ -51,6 +59,7 @@ export default function Rankings() {
       {/* Controls */}
       <div className="filters">
         <select
+          aria-label="Ranking job"
           value={selectedJob}
           onChange={e => { setSearchParams({ job: e.target.value }); setPage(1) }}
           style={{ minWidth: 200 }}
@@ -60,7 +69,7 @@ export default function Rankings() {
         </select>
 
         <input
-          type="number"
+          aria-label="Min score (0–1)" type="number"
           placeholder="Min score (0–1)"
           min={0} max={1} step={0.01}
           value={minScore}
@@ -85,7 +94,8 @@ export default function Rankings() {
         )}
       </div>
 
-      {error && <div className="error-box">{error}</div>}
+      {jobsError && <div className="error-box" role="alert">Could not load jobs: {jobsError}</div>}
+      {error && <div className="error-box" role="alert">{error}</div>}
 
       {!selectedJob ? (
         <div className="card">

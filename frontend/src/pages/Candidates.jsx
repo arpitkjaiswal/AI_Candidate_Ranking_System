@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import { listCandidates } from '../api'
+import DatasetUpload from '../components/DatasetUpload'
 import { Spinner, EmptyState, Badge } from '../components/UI'
 
 const PAGE_SIZE = 50
@@ -13,13 +14,16 @@ export default function Candidates() {
   const [error, setError] = useState(null)
 
   const [page, setPage] = useState(1)
+  const [revision, setRevision] = useState(0)
   const [country, setCountry] = useState(searchParams.get('country') || '')
   const [openToWork, setOpenToWork] = useState(searchParams.get('open') || '')
   const [minYoe, setMinYoe] = useState('')
   const [maxYoe, setMaxYoe] = useState('')
 
   useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
+    setData(null)
     setError(null)
     const params = { page, size: PAGE_SIZE }
     if (country) params.country = country
@@ -27,11 +31,12 @@ export default function Candidates() {
     if (minYoe) params.min_yoe = minYoe
     if (maxYoe) params.max_yoe = maxYoe
 
-    listCandidates(params)
+    listCandidates(params, { signal: controller.signal })
       .then(setData)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [page, country, openToWork, minYoe, maxYoe])
+      .catch(e => { if (!controller.signal.aborted) setError(e.message) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [page, country, openToWork, minYoe, maxYoe, revision])
 
   useEffect(() => { setPage(1) }, [country, openToWork, minYoe, maxYoe])
 
@@ -46,29 +51,31 @@ export default function Candidates() {
         </div>
       </div>
 
+      <DatasetUpload onImported={() => { setPage(1); setRevision(value => value + 1) }} />
+
       <div className="filters">
         <input
-          type="text"
+          aria-label="Filter by country…" type="text"
           placeholder="Filter by country…"
           value={country}
           onChange={e => setCountry(e.target.value)}
           style={{ width: 160 }}
         />
-        <select value={openToWork} onChange={e => setOpenToWork(e.target.value)} style={{ width: 160 }}>
+        <select aria-label="Work availability" value={openToWork} onChange={e => setOpenToWork(e.target.value)} style={{ width: 160 }}>
           <option value="">All candidates</option>
           <option value="true">Open to work</option>
           <option value="false">Not open</option>
         </select>
         <input
-          type="number"
-          placeholder="Min YOE"
+          aria-label="Min YOE" type="number"
+          min="0" placeholder="Min YOE"
           value={minYoe}
           onChange={e => setMinYoe(e.target.value)}
           style={{ width: 90 }}
         />
         <input
-          type="number"
-          placeholder="Max YOE"
+          aria-label="Max YOE" type="number"
+          min="0" placeholder="Max YOE"
           value={maxYoe}
           onChange={e => setMaxYoe(e.target.value)}
           style={{ width: 90 }}
@@ -144,7 +151,7 @@ export default function Candidates() {
                         : <Badge label="passive" type="gray" />}
                     </td>
                     <td>
-                      <Link to={`/candidates/${c.candidate_id}`} className="btn btn-secondary btn-sm">Profile</Link>
+                      <Link to={`/candidates/${encodeURIComponent(c.candidate_id)}`} className="btn btn-secondary btn-sm">Profile</Link>
                     </td>
                   </tr>
                 ))}

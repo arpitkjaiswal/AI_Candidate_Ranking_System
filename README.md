@@ -58,6 +58,12 @@ candidates.jsonl
 
 ---
 
+## Run the working application
+
+See [QUICKSTART.md](QUICKSTART.md) for the one-command local launcher, SQLite database, browser candidate import and job-specific CPU ranking. See [VALIDATION.md](VALIDATION.md) for executed checks and pending verification. The initial demo contains two fictional profiles; import real candidate data through the UI to use your own dataset. Custom job descriptions drive skill, career and semantic matching. The challenge CLI retains its original specialized scoring.
+
+Deployment instructions are in [DEPLOYMENT.md](DEPLOYMENT.md) for the next stage.
+
 ## Installation & Usage
 
 ### Prerequisites

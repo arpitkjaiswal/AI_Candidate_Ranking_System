@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: redrob-ranking
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    numInstances: 1
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: DEMO_MODE
+        value: "true"
+      - key: APP_USERNAME
+        value: admin
+      - key: APP_PASSWORD
+        generateValue: true
+    disk:
+      name: ranking-data
+      mountPath: /var/data
+      sizeGB: 10

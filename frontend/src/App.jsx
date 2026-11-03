@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import Dashboard from './pages/Dashboard'
 import Jobs from './pages/Jobs'
@@ -20,6 +20,7 @@ export default function App() {
             <Route path="/candidates"             element={<Candidates />} />
             <Route path="/candidates/:id"         element={<CandidateDetail />} />
             <Route path="/pipeline"               element={<Pipeline />} />
+            <Route path="*" element={<div className="card"><h2>Page not found</h2><p>The page you requested does not exist.</p><Link to="/">Return to dashboard</Link></div>} />
           </Routes>
         </main>
       </div>

@@ -199,6 +199,8 @@ def rank_candidates(
     Returns:
         List of dicts with candidate_id, rank, score, component_scores, features
     """
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
     start_time = time.time()
 
     # ─── Load pre-computed data ──────────────────────────────────────────
@@ -211,6 +213,16 @@ def rank_candidates(
         all_features = pickle.load(f)
 
     similarities = np.load(os.path.join(precomputed_dir, "similarities.npy"))
+    if not candidate_ids or len(candidate_ids) != len(similarities):
+        raise ValueError("Ranking artifacts are empty or inconsistent.")
+
+    if not np.isfinite(similarities).all():
+        raise ValueError("Ranking similarities contain non-finite values.")
+    context_path = os.path.join(precomputed_dir, "job_context.json")
+    job_context = None
+    if os.path.exists(context_path):
+        with open(context_path, encoding="utf-8") as context_file:
+            job_context = json.load(context_file)
 
     logger.info(f"Loaded data for {len(candidate_ids)} candidates")
 
@@ -222,17 +234,20 @@ def rank_candidates(
         features = all_features.get(cid, {})
         semantic_sim = float(similarities[i])
 
-        # Compute component scores
-        component_scores = compute_component_scores(features, semantic_sim)
-
-        # Compute final score
-        final_score = compute_final_score(component_scores, features, weights)
+        evidence = None
+        if job_context is not None:
+            from .job_matching import score_job_match
+            component_scores, final_score, evidence = score_job_match(job_context, cid, semantic_sim)
+        else:
+            component_scores = compute_component_scores(features, semantic_sim)
+            final_score = compute_final_score(component_scores, features, weights)
 
         scored_candidates.append({
             "candidate_id": cid,
             "score": final_score,
             "component_scores": component_scores,
             "features": features,
+            **({"job_match": evidence, "ranking_method": "job_description_match"} if evidence is not None else {}),
         })
 
     # ─── Sort and select top-K ───────────────────────────────────────────
@@ -252,6 +267,10 @@ def rank_candidates(
         f"Top score: {top_candidates[0]['score']:.4f}, "
         f"Bottom score: {top_candidates[-1]['score']:.4f}"
     )
+
+    if job_context is not None:
+        logger.info("Ranked candidates against the supplied job description.")
+        return top_candidates
 
     # Log some stats
     honeypot_count = sum(

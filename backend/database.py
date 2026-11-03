@@ -62,6 +62,8 @@ def ensure_candidates_dataset() -> Path | None:
 
     dataset_url = os.environ.get("CANDIDATES_URL")
     if not dataset_url:
+        if os.environ.get("CANDIDATES_PATH"):
+            raise FileNotFoundError("Configured CANDIDATES_PATH does not exist.")
         return None
 
     candidate_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +98,7 @@ def _normalize_candidate(record: dict) -> dict:
         "summary": profile.get("summary") or record.get("summary"),
         "location": profile.get("location"),
         "country": profile.get("country"),
-        "years_of_experience": profile.get("years_of_experience", 0),
+        "years_of_experience": float(profile.get("years_of_experience") or 0),
         "current_title": profile.get("current_title"),
         "current_company": profile.get("current_company"),
         "current_company_size": profile.get("current_company_size"),
@@ -108,7 +110,7 @@ def _normalize_candidate(record: dict) -> dict:
         "expected_salary_min": signals.get("expected_salary_min_lpa", 0),
         "expected_salary_max": signals.get("expected_salary_max_lpa", 0),
         "github_activity_score": signals.get("github_activity_score", -1),
-        "profile_completeness_score": signals.get("profile_completeness_score", 0),
+        "profile_completeness_score": float(signals.get("profile_completeness_score") or 0),
         "linkedin_connected": int(bool(signals.get("linkedin_connected", False))),
         "verified_email": int(bool(signals.get("verified_email", False))),
         "verified_phone": int(bool(signals.get("verified_phone", False))),
@@ -239,30 +241,14 @@ def _build_fallback_candidates() -> list[dict]:
     ]
 
 
-def _seed_database_from_records(conn: sqlite3.Connection, records: Iterable[dict]) -> int:
+def _seed_database_from_records(
+    conn: sqlite3.Connection, records: Iterable[dict], *, commit: bool = True
+) -> int:
     count = 0
     for record in records:
         candidate = _normalize_candidate(record)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO candidates (
-                candidate_id, anonymized_name, headline, summary, location, country,
-                years_of_experience, current_title, current_company, current_company_size,
-                current_industry, open_to_work, willing_to_relocate, preferred_work_mode,
-                notice_period_days, expected_salary_min, expected_salary_max,
-                github_activity_score, profile_completeness_score, linkedin_connected,
-                verified_email, verified_phone, last_active_date, signup_date, raw_json
-            ) VALUES (
-                :candidate_id, :anonymized_name, :headline, :summary, :location, :country,
-                :years_of_experience, :current_title, :current_company, :current_company_size,
-                :current_industry, :open_to_work, :willing_to_relocate, :preferred_work_mode,
-                :notice_period_days, :expected_salary_min, :expected_salary_max,
-                :github_activity_score, :profile_completeness_score, :linkedin_connected,
-                :verified_email, :verified_phone, :last_active_date, :signup_date, :raw_json
-            )
-            """,
-            candidate,
-        )
+        from backend.crud import upsert_candidate
+        upsert_candidate(conn, candidate)
 
         candidate_id = candidate["candidate_id"]
         conn.execute("DELETE FROM candidate_skills WHERE candidate_id = ?", (candidate_id,))
@@ -327,15 +313,18 @@ def _seed_database_from_records(conn: sqlite3.Connection, records: Iterable[dict
 
         count += 1
         if count % 1000 == 0:
-            conn.commit()
+            if commit:
+                conn.commit()
             logger.info("Seeded %d candidates so far...", count)
 
-    conn.commit()
+    if commit:
+        conn.commit()
     return count
 
 
-def seed_database_if_empty(db_path: Path = DB_PATH) -> int:
+def seed_database_if_empty(db_path: Path | None = None) -> int:
     """Populate an empty DB from the persistent dataset, or demo records locally."""
+    db_path = Path(db_path) if db_path is not None else get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -346,32 +335,41 @@ def seed_database_if_empty(db_path: Path = DB_PATH) -> int:
 
         dataset_candidates: Iterable[dict] | None = None
         try:
-            from src.data_loader import load_candidates_stream
+            from backend.datasets import records_from_dataset
 
             candidate_path = ensure_candidates_dataset()
             if candidate_path:
                 # Keep the 487 MB JSONL streaming; do not load 100K records into RAM.
-                dataset_candidates = load_candidates_stream(candidate_path)
+                dataset_candidates = records_from_dataset(candidate_path)
         except Exception as exc:
-            if os.environ.get("CANDIDATES_URL"):
+            if os.environ.get("CANDIDATES_URL") or os.environ.get("CANDIDATES_PATH"):
                 raise RuntimeError("Configured candidate dataset could not be loaded") from exc
             logger.warning("Dataset load skipped: %s", exc)
 
         if dataset_candidates is None:
+            if os.getenv("DEMO_MODE", "true").lower() != "true":
+                logger.info("No dataset configured; demo seeding is disabled.")
+                return 0
             dataset_candidates = _build_fallback_candidates()
+            demo_path = DATA_DIR / "candidates.jsonl" if db_path == DB_PATH else db_path.parent / "candidates.jsonl"
+            if not demo_path.exists():
+                demo_path.write_text("".join(json.dumps(c) + "\n" for c in dataset_candidates))
 
-        seeded = _seed_database_from_records(conn, dataset_candidates)
+        seeded = _seed_database_from_records(conn, dataset_candidates, commit=False)
+        conn.commit()
         logger.info("Seeded %d candidates into %s", seeded, db_path)
         return seeded
     finally:
         conn.close()
 
 
-def init_db(db_path: Path = DB_PATH, schema_path: Path = SCHEMA_PATH) -> None:
+def init_db(db_path: Path | None = None, schema_path: Path | None = None) -> None:
     """
     Initialize the SQLite database with the backend schema if tables don't exist yet.
     Safe to run multiple times (uses CREATE TABLE IF NOT EXISTS).
     """
+    db_path = Path(db_path) if db_path is not None else get_db_path()
+    schema_path = Path(schema_path) if schema_path is not None else SCHEMA_PATH
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     with open(schema_path, "r") as f:
@@ -382,8 +380,9 @@ def init_db(db_path: Path = DB_PATH, schema_path: Path = SCHEMA_PATH) -> None:
     logger.info(f"Database initialized at: {db_path} (seeded={seeded_count})")
 
 
-def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
+def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     """Return a new SQLite connection with row_factory set."""
+    db_path = Path(db_path) if db_path is not None else get_db_path()
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")   # Allow concurrent reads during writes

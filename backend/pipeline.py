@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -31,132 +29,48 @@ from backend.database import get_data_dir, get_db_path
 PRECOMPUTED_DIR = get_data_dir()
 
 
-def _populate_candidates_to_db(conn, candidates_path: str) -> int:
+def _populate_candidates_to_db(conn, candidates_path: str, *, commit: bool = True) -> int:
     """
     Stream candidates from JSONL and populate the SQLite candidates/skills/
     career/education tables using the backend crud module.
     Returns the count of inserted candidates.
     """
-    import json as _json
-    from backend.crud import upsert_candidate
+    from backend.database import _seed_database_from_records
+    from backend.datasets import records_from_dataset
+    return _seed_database_from_records(conn, records_from_dataset(Path(candidates_path)), commit=commit)
 
+
+def _snapshot_dataset(source_path: Path, target_path: Path) -> int:
+    """Validate a stable per-run dataset, including gzipped local JSONL sources."""
+    from backend.datasets import records_from_dataset
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
-    with open(candidates_path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                raw = _json.loads(line)
-            except Exception:
-                continue
-
-            cid = raw.get("candidate_id", "")
-            if not cid:
-                continue
-
-            profile = raw.get("profile", {}) or {}
-            signals = raw.get("redrob_signals", {}) or {}
-
-            row = {
-                "candidate_id": cid,
-                "anonymized_name": raw.get("anonymized_name", ""),
-                "headline": profile.get("headline"),
-                "summary": profile.get("summary"),
-                "location": profile.get("location"),
-                "country": profile.get("country"),
-                "years_of_experience": float(profile.get("years_of_experience") or 0),
-                "current_title": profile.get("current_title"),
-                "current_company": profile.get("current_company"),
-                "current_company_size": profile.get("current_company_size"),
-                "current_industry": profile.get("current_industry"),
-                "open_to_work": int(bool(signals.get("open_to_work_flag", False))),
-                "willing_to_relocate": int(bool(signals.get("willing_to_relocate", False))),
-                "preferred_work_mode": signals.get("preferred_work_mode", "flexible"),
-                "notice_period_days": signals.get("notice_period_days"),
-                "expected_salary_min": signals.get("expected_salary_min_lpa"),
-                "expected_salary_max": signals.get("expected_salary_max_lpa"),
-                "github_activity_score": signals.get("github_activity_score"),
-                "profile_completeness_score": float(signals.get("profile_completeness_score") or 0),
-                "linkedin_connected": int(bool(signals.get("linkedin_connected", False))),
-                "verified_email": int(bool(signals.get("verified_email", False))),
-                "verified_phone": int(bool(signals.get("verified_phone", False))),
-                "last_active_date": signals.get("last_active_date"),
-                "signup_date": signals.get("signup_date"),
-                "raw_json": _json.dumps(raw),
-            }
-            upsert_candidate(conn, row)
-
-            # Skills
-            for sk in (raw.get("skills") or []):
-                conn.execute(
-                    """
-                    INSERT INTO candidate_skills
-                        (candidate_id, skill_name, proficiency, endorsements, duration_months, cluster)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        cid,
-                        sk.get("name", ""),
-                        sk.get("proficiency", "beginner"),
-                        int(sk.get("endorsements") or 0),
-                        int(sk.get("duration_months") or 0),
-                        None,  # cluster will be mapped below if needed
-                    ),
-                )
-
-            # Education
-            for edu in (raw.get("education") or []):
-                conn.execute(
-                    """
-                    INSERT INTO candidate_education
-                        (candidate_id, institution, degree, field_of_study,
-                         start_year, end_year, grade, tier)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        cid,
-                        edu.get("institution"),
-                        edu.get("degree"),
-                        edu.get("field_of_study"),
-                        edu.get("start_year"),
-                        edu.get("end_year"),
-                        edu.get("grade"),
-                        edu.get("tier", "unknown"),
-                    ),
-                )
-
-            # Career
-            for job in (raw.get("career_history") or []):
-                conn.execute(
-                    """
-                    INSERT INTO candidate_career
-                        (candidate_id, company, title, start_date, end_date,
-                         duration_months, is_current, industry, company_size, description)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        cid,
-                        job.get("company"),
-                        job.get("title"),
-                        job.get("start_date"),
-                        job.get("end_date"),
-                        int(job.get("duration_months") or 0),
-                        int(bool(job.get("is_current", False))),
-                        job.get("industry"),
-                        job.get("company_size"),
-                        job.get("description"),
-                    ),
-                )
-
+    with target_path.open("w", encoding="utf-8") as target:
+        for record in records_from_dataset(source_path):
+            target.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
             count += 1
-            if count % 5000 == 0:
-                conn.commit()
-                logger.info(f"  Inserted {count} candidates so far...")
-
-    conn.commit()
-    logger.info(f"Candidate population complete: {count} rows inserted.")
     return count
+
+
+def _invalidate_changed_profile_rankings(conn, candidates_path: str, current_job_id: str) -> None:
+    """Remove other jobs' stale scores only when a profile actually changes."""
+    from backend.datasets import records_from_dataset, validate_record
+    for record in records_from_dataset(Path(candidates_path)):
+        old = conn.execute("SELECT raw_json FROM candidates WHERE candidate_id = ?", (record["candidate_id"],)).fetchone()
+        if old is None:
+            continue
+        try:
+            existing = validate_record(json.loads(old["raw_json"]))
+        except (ValueError, TypeError, AttributeError, KeyError, OverflowError, RecursionError):
+            existing = None
+        if existing == record:
+            continue
+        conn.execute(
+            "UPDATE jobs SET status='pending' WHERE job_id != ? AND job_id IN "
+            "(SELECT job_id FROM rankings WHERE candidate_id=?)",
+            (current_job_id, record["candidate_id"]),
+        )
+        conn.execute("DELETE FROM rankings WHERE candidate_id=? AND job_id != ?", (record["candidate_id"], current_job_id))
 
 
 def run_full_pipeline(
@@ -176,7 +90,8 @@ def run_full_pipeline(
     3. Generate human-readable reasoning
     4. Persist ranked results to SQLite
     """
-    from backend.database import get_connection, init_db
+    from backend.database import get_connection
+    from backend.crud import get_job
     from backend.crud import (
         upsert_rankings_batch,
         finish_pipeline_run,
@@ -184,29 +99,51 @@ def run_full_pipeline(
     )
 
     db = db_path or get_db_path()
-    conn = get_connection(db)
+    conn = None
+    artifacts_dir = PRECOMPUTED_DIR / "runs" / run_id
 
     start = time.time()
     logger.info(f"[run_id={run_id}] Pipeline starting for job_id={job_id}")
 
     try:
-        # ── Step 1: Populate candidates table ────────────────────────────────
+        conn = get_connection(db)
+        # ── Step 1: Validate a stable dataset snapshot ────────────────────────────────
         if not Path(candidates_path).exists():
             raise FileNotFoundError(f"candidates file not found: {candidates_path}")
 
-        logger.info("[Pipeline] Populating candidates table...")
-        total = _populate_candidates_to_db(conn, candidates_path)
+        if embedding_mode == "sentence_transformers":
+            try:
+                from sentence_transformers import SentenceTransformer  # noqa: F401
+            except ImportError as exc:
+                raise ValueError(
+                    "Sentence Transformers is unavailable. Use TF-IDF or install the optional sentence-transformers dependencies."
+                ) from exc
+
+        snapshot_path = artifacts_dir / "candidates.jsonl"
+        source_path = Path(candidates_path)
+        _snapshot_dataset(source_path, snapshot_path)
+        # The API's database snapshot is disposable once the canonical per-run
+        # copy exists. Never remove an uploaded or externally supplied dataset.
+        expected_source = get_data_dir() / "snapshots" / f"{run_id}.jsonl"
+        if source_path.resolve() == expected_source.resolve():
+            source_path.unlink(missing_ok=True)
+        candidates_path = str(snapshot_path)
 
         # ── Step 2: Run data preparation (src pipeline) ───────────────────
         logger.info("[Pipeline] Running feature extraction & embeddings...")
         from src.data_preparation import prepare_all_data
 
-        prepare_all_data(
+        prepared = prepare_all_data(
             candidates_path=candidates_path,
-            output_dir=str(PRECOMPUTED_DIR),
+            output_dir=str(artifacts_dir),
             embedding_mode=embedding_mode,
-            populate_sqlite=False,  # We already handled it above
+            job_description=get_job(conn, job_id)["description"],
+            populate_sqlite=False,
         )
+        if embedding_mode == "sentence_transformers":
+            from src.embedding_engine import EmbeddingEngine
+            if EmbeddingEngine.load(prepared["engine"]).mode != embedding_mode:
+                raise ValueError("Sentence Transformers failed; this run will not silently switch to TF-IDF.")
 
         # ── Step 3: Load tuned weights if available ───────────────────────
         weights = None
@@ -221,7 +158,7 @@ def run_full_pipeline(
         from src.ranking_engine import rank_candidates
 
         ranked = rank_candidates(
-            precomputed_dir=str(PRECOMPUTED_DIR),
+            precomputed_dir=str(artifacts_dir),
             weights=weights,
             top_k=top_k,
         )
@@ -230,15 +167,19 @@ def run_full_pipeline(
         logger.info("[Pipeline] Generating reasoning strings...")
         from src.reasoning_generator import generate_all_reasoning
 
-        ranked = generate_all_reasoning(ranked, str(PRECOMPUTED_DIR))
+        ranked = generate_all_reasoning(ranked, str(artifacts_dir))
 
         # ── Step 6: Persist rankings ──────────────────────────────────────
         logger.info("[Pipeline] Saving rankings to SQLite...")
-        upsert_rankings_batch(conn, job_id, ranked)
-
-        # ── Step 7: Mark job as done ──────────────────────────────────────
-        update_job_status(conn, job_id, "done")
-        finish_pipeline_run(conn, run_id, status="done", total_candidates=total)
+        # Publish profiles, relations, rankings and success status together. A failure
+        # anywhere in this transaction preserves the previous successful result.
+        conn.execute("BEGIN IMMEDIATE")
+        _invalidate_changed_profile_rankings(conn, candidates_path, job_id)
+        total = _populate_candidates_to_db(conn, candidates_path, commit=False)
+        upsert_rankings_batch(conn, job_id, ranked, commit=False)
+        update_job_status(conn, job_id, "done", commit=False)
+        finish_pipeline_run(conn, run_id, status="done", total_candidates=total, commit=False)
+        conn.commit()
 
         elapsed = time.time() - start
         logger.info(
@@ -249,11 +190,16 @@ def run_full_pipeline(
     except Exception as exc:
         logger.exception(f"[run_id={run_id}] Pipeline FAILED: {exc}")
         try:
-            update_job_status(conn, job_id, "failed")
-            finish_pipeline_run(conn, run_id, status="failed", error_message=str(exc))
+            if conn is None:
+                conn = get_connection(db)
+            conn.rollback()
+            update_job_status(conn, job_id, "failed", commit=False)
+            finish_pipeline_run(conn, run_id, status="failed", error_message=str(exc), commit=False)
+            conn.commit()
         except Exception:
-            pass
-        raise
+            logger.exception("Could not persist failure status for run %s", run_id)
+        # The error is persisted for polling; do not crash the worker thread.
 
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()

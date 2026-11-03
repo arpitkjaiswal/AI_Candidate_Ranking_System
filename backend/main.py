@@ -28,11 +28,11 @@ import os
 import sys
 import threading
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 # ─── Ensure project root is on path ──────────────────────────────────────────
@@ -74,11 +74,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the SQLite database on startup."""
-    try:
-        init_db()
-        logger.info("Database initialized successfully.")
-    except Exception as exc:
-        logger.warning(f"DB init warning (may already exist): {exc}")
+    init_db()
+    from backend.database import get_connection
+    with closing(get_connection()) as conn:
+        conn.execute("UPDATE jobs SET status='failed' WHERE status='running'")
+        conn.execute("UPDATE pipeline_runs SET status='failed', finished_at=datetime('now'), error_message='Server restarted before this run completed. Please retry.' WHERE status='running'")
+        conn.commit()
+    logger.info("Database initialized successfully.")
     yield
 
 
@@ -97,11 +99,36 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Tighten in production
-    allow_credentials=True,
+    allow_origins=[s.strip() for s in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if s.strip()],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Optional HTTP Basic protection for private deployments. TLS must terminate at the host.
+# The browser supplies credentials for both the SPA and same-origin API requests.
+@app.middleware("http")
+async def protect_deployment(request, call_next):
+    import base64
+    import secrets
+    from fastapi.responses import JSONResponse
+    password = os.getenv("APP_PASSWORD")
+    if password and request.url.path != "/health":
+        authorized = False
+        try:
+            scheme, encoded = request.headers.get("authorization", "").split(" ", 1)
+            username, supplied = base64.b64decode(encoded, validate=True).decode("utf-8").split(":", 1)
+            authorized = scheme.lower() == "basic" and secrets.compare_digest(username.encode(), os.getenv("APP_USERNAME", "admin").encode()) and secrets.compare_digest(supplied.encode(), password.encode())
+        except (ValueError, UnicodeDecodeError):
+            pass
+        if not authorized:
+            return JSONResponse({"detail": "Authentication required."}, status_code=401, headers={"WWW-Authenticate": 'Basic realm="Redrob", charset="UTF-8"'})
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -111,6 +138,9 @@ app.add_middleware(
 @app.get("/health", tags=["Health"], response_model=MessageResponse)
 def health_check():
     """Returns 200 OK if the service is alive."""
+    from backend.database import get_connection
+    with closing(get_connection()) as conn:
+        conn.execute("SELECT 1 FROM candidates LIMIT 1").fetchone()
     return {"message": "Redrob Ranking Engine API is running."}
 
 
@@ -129,10 +159,12 @@ def list_candidates(
     size: int = Query(50, ge=1, le=500, description="Results per page"),
     country: Optional[str] = Query(None, description="Filter by country (case-insensitive)"),
     open_to_work: Optional[bool] = Query(None, description="Filter by open-to-work flag"),
-    min_yoe: Optional[float] = Query(None, description="Minimum years of experience"),
-    max_yoe: Optional[float] = Query(None, description="Maximum years of experience"),
+    min_yoe: Optional[float] = Query(None, ge=0, description="Minimum years of experience"),
+    max_yoe: Optional[float] = Query(None, ge=0, description="Maximum years of experience"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
+    if min_yoe is not None and max_yoe is not None and min_yoe > max_yoe:
+        raise HTTPException(status_code=422, detail="Minimum experience cannot exceed maximum experience.")
     offset = (page - 1) * size
     total, candidates = crud.list_candidates(
         conn,
@@ -196,10 +228,10 @@ def get_candidate_features(candidate_id: str, conn: sqlite3.Connection = Depends
         raise HTTPException(status_code=500, detail=f"Failed to parse raw_json: {exc}")
 
     try:
-        from src.data_cleaner import clean_candidate
+        from src.data_cleaner import clean_candidate_dict
         from src.feature_extractor import extract_all_features
 
-        cleaned = clean_candidate(candidate)
+        cleaned = clean_candidate_dict(candidate)
         features = extract_all_features(cleaned)
     except Exception as exc:
         logger.exception(f"Feature extraction failed for {candidate_id}")
@@ -238,7 +270,11 @@ def create_job(body: JobCreate, conn: sqlite3.Connection = Depends(get_db)):
             status_code=409,
             detail=f"Job '{body.job_id}' already exists. Use a unique job_id.",
         )
-    job = crud.create_job(conn, body.job_id, body.title, body.description)
+    try:
+        job = crud.create_job(conn, body.job_id, body.title, body.description)
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="Job ID already exists.")
     return job
 
 
@@ -317,6 +353,77 @@ def get_ranking_detail(
     return result
 
 
+# Candidate data is imported locally; no cloud/model credentials are needed.
+@app.get("/api/system", tags=["System"])
+def system_status(conn: sqlite3.Connection = Depends(get_db)):
+    import importlib.util
+    from backend.database import get_candidates_path
+    counts = {name: conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+              for name in ("candidates", "jobs", "rankings")}
+    modes = ["tfidf"]
+    if importlib.util.find_spec("sentence_transformers") is not None:
+        modes.append("sentence_transformers")
+    return {"total_candidates": counts["candidates"], "total_jobs": counts["jobs"],
+            "total_rankings": counts["rankings"], "dataset_available": bool(counts["candidates"]) or get_candidates_path().is_file(),
+            "default_candidates_path": "./candidates.jsonl", "demo_mode": os.getenv("DEMO_MODE", "true").lower() == "true",
+            "embedding_modes": modes}
+
+
+@app.post("/api/datasets", status_code=201, tags=["Candidates"])
+async def upload_dataset(request: Request, filename: str = Query("candidates.jsonl", max_length=200),
+                         conn: sqlite3.Connection = Depends(get_db)):
+    import tempfile
+    from starlette.concurrency import run_in_threadpool
+    from backend.database import get_data_dir, _seed_database_from_records
+    from backend.datasets import MAX_UPLOAD_BYTES, validate_dataset, records_from_dataset
+    if not filename.lower().endswith(".jsonl"):
+        raise HTTPException(status_code=422, detail="Upload a JSONL file, with one candidate object per line.")
+    length = request.headers.get("content-length")
+    if length and (not length.isdigit() or int(length) > MAX_UPLOAD_BYTES):
+        raise HTTPException(status_code=413, detail="Upload exceeds the 50 MiB limit.")
+    upload_dir = get_data_dir() / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dataset_id = str(uuid.uuid4())
+    destination = upload_dir / f"{dataset_id}.jsonl"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=upload_dir, suffix=".part", delete=False) as handle:
+            temp_path = Path(handle.name)
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Upload exceeds the 50 MiB limit.")
+                handle.write(chunk)
+        try:
+            total = await run_in_threadpool(validate_dataset, temp_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        def publish():
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if conn.execute("SELECT 1 FROM pipeline_runs WHERE status='running' LIMIT 1").fetchone():
+                    raise HTTPException(status_code=409, detail="Wait for the active pipeline to finish before importing candidates.")
+                conn.execute("CREATE TEMP TABLE import_ids (candidate_id TEXT PRIMARY KEY)")
+                conn.executemany("INSERT INTO import_ids VALUES (?)", ((row["candidate_id"],) for row in records_from_dataset(temp_path)))
+                # Changed profiles invalidate old scores; unrelated jobs/profiles are preserved.
+                conn.execute("UPDATE jobs SET status='pending' WHERE job_id IN (SELECT job_id FROM rankings WHERE candidate_id IN (SELECT candidate_id FROM import_ids))")
+                conn.execute("DELETE FROM rankings WHERE candidate_id IN (SELECT candidate_id FROM import_ids)")
+                _seed_database_from_records(conn, records_from_dataset(temp_path), commit=False)
+                temp_path.replace(destination)
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                destination.unlink(missing_ok=True)
+                raise
+        await run_in_threadpool(publish)
+        return {"dataset_id": dataset_id, "filename": Path(filename).name, "candidates_path": str(destination), "total_candidates": total}
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pipeline
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -345,35 +452,69 @@ def trigger_pipeline(body: PipelineRunRequest, conn: sqlite3.Connection = Depend
             detail=f"Job '{body.job_id}' not found. Create it first via POST /api/jobs.",
         )
 
-    if job.get("status") == "running":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Job '{body.job_id}' is already running.",
-        )
-
+    from backend.database import get_candidates_path, get_data_dir
     run_id = str(uuid.uuid4())
-    crud.create_pipeline_run(conn, run_id, body.job_id)
-    crud.update_job_status(conn, body.job_id, "running")
+    candidate_path = get_candidates_path() if body.candidates_path == "./candidates.jsonl" else Path(body.candidates_path)
+    use_database = body.candidates_path == "./candidates.jsonl" and bool(conn.execute("SELECT 1 FROM candidates LIMIT 1").fetchone())
+    if use_database:
+        snapshot_dir = get_data_dir() / "snapshots"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        candidate_path = snapshot_dir / f"{run_id}.jsonl"
+    if not candidate_path.is_absolute():
+        candidate_path = ROOT_DIR / candidate_path
+    candidate_path = candidate_path.resolve()
+    roots = (ROOT_DIR.resolve(), get_data_dir().resolve())
+    if not any(candidate_path.is_relative_to(root) for root in roots):
+        raise HTTPException(status_code=422, detail="Dataset must be inside the project or DATA_DIR.")
+    if not use_database and not candidate_path.is_file():
+        raise HTTPException(status_code=422, detail="Candidate dataset is missing. Configure CANDIDATES_PATH or use demo mode.")
+    if candidate_path.suffix not in {".jsonl", ".gz"}:
+        raise HTTPException(status_code=422, detail="Dataset must be JSONL or gzipped JSONL.")
+    # Serialize admission across requests and processes. SQLite is a single-worker deployment.
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT 1 FROM pipeline_runs WHERE status = 'running' LIMIT 1").fetchone():
+            conn.rollback()
+            raise HTTPException(status_code=409, detail="A pipeline is already running. Try again after it finishes.")
+        # Snapshot under the same write reservation as admission so concurrent
+        # uploads cannot replace profiles between snapshot and run creation.
+        if use_database:
+            import json
+            with candidate_path.open("w", encoding="utf-8") as snapshot:
+                for row in conn.execute("SELECT raw_json FROM candidates ORDER BY candidate_id"):
+                    if not row["raw_json"]:
+                        raise HTTPException(status_code=422, detail="A candidate has no source profile. Reimport that candidate before ranking.")
+                    try:
+                        snapshot.write(json.dumps(json.loads(row["raw_json"])) + "\n")
+                    except ValueError as exc:
+                        raise HTTPException(status_code=422, detail="A candidate has an invalid source profile. Reimport it before ranking.") from exc
+        conn.execute("INSERT INTO pipeline_runs (run_id, job_id, status) VALUES (?, ?, 'running')", (run_id, body.job_id))
+        conn.execute("UPDATE jobs SET status = 'running' WHERE job_id = ?", (body.job_id,))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        if use_database:
+            candidate_path.unlink(missing_ok=True)
+        raise
 
     # Launch pipeline in background thread so the API responds immediately
     def _run():
-        from backend.database import get_candidates_path
         from backend.pipeline import run_full_pipeline
-        # The frontend's default path is local-development friendly. In
-        # deployment, resolve it to the persistent dataset location instead.
-        candidates_path = body.candidates_path
-        if candidates_path == "./candidates.jsonl":
-            candidates_path = str(get_candidates_path())
         run_full_pipeline(
             run_id=run_id,
             job_id=body.job_id,
-            candidates_path=candidates_path,
+            candidates_path=str(candidate_path),
             top_k=body.top_k,
             embedding_mode=body.embedding_mode,
         )
 
     thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except RuntimeError:
+        crud.finish_pipeline_run(conn, run_id, "failed", error_message="Worker could not start.")
+        crud.update_job_status(conn, body.job_id, "failed")
+        raise HTTPException(status_code=503, detail="Pipeline worker is unavailable.")
     logger.info(f"Pipeline run {run_id} started in background thread.")
 
     return crud.get_pipeline_run(conn, run_id)
@@ -404,3 +545,23 @@ def get_pipeline_run(run_id: str, conn: sqlite3.Connection = Depends(get_db)):
     if not run:
         raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
     return run
+
+
+# A single production origin serves the UI and API; Vite is only needed in development.
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+FRONTEND_DIST = ROOT_DIR / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found.")
+        file = (FRONTEND_DIST / path).resolve()
+        if not file.is_relative_to(FRONTEND_DIST.resolve()):
+            raise HTTPException(status_code=404, detail="Not found.")
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(FRONTEND_DIST / "index.html")
